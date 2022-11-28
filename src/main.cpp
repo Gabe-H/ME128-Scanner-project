@@ -3,6 +3,8 @@
 #include <Stepper.h>
 #include <Ultrasonic.h>
 #include <Servo.h>
+#include <Encoder.h>
+#include <EEPROM.h>
 
 /**
  * As stepper motor spins cw and ccw from 0 to 180 degrees, the
@@ -11,21 +13,37 @@
  * output will trigger.
 */
 
+// Uncomment the stepper motor being used
+#define NEMA17 1
+// #define STARTER_STEPPER 1
+
 #define TRIGGER_DISTANCE_CM 5
-#define FAN_MOTOR 13
+
+#define FAN_MOTOR 10
+#define BEEPER_PIN 11
+#define ENCODER_BUTTON 4
+
+#define BLUE_LED A3
+#define RED_LED A2
 
 // const int rs = 12, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
 // LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 
-const int stepsPerRevolution = 200;  // change this to fit the number of steps per revolution
-Stepper myStepper(stepsPerRevolution, 8, 9, 10, 11);
+int stepsPerRevolution = 200;  // change this to fit the number of steps per revolution
+// Stepper myStepper(stepsPerRevolution, 8, 9, 10, 11);
+Stepper *myStepper;
 Servo myServo;
-Ultrasonic ultrasonic(6, 7); // Init ultrasonic sensor on pins 12 and 13
+Ultrasonic ultrasonic(A5, A4); // Init ultrasonic sensor on pins 12 and 13
+Encoder myEnc(2, 3);
+
+long oldPosition = -999;
 
 int distance = 9999; // Distance in cm
 float angle = 0.0; // Direction angle
 bool clockwise = false;
 int numSteps = 0;
+
+int stepRange = 40; // Number of steps to take for each scan pass
 
 /*
 // Init lcd and any variables needed
@@ -54,8 +72,18 @@ void lcdLoop()
 
 void stepperSetup()
 {
+#ifdef NEMA17
   // Set stepper speed
-  myStepper.setSpeed(10);
+  stepsPerRevolution = 200;  // change this to fit the number of steps per revolution
+  myStepper = new Stepper(stepsPerRevolution, 6, 7, 8, 9);
+  myStepper->setSpeed(10);
+#endif
+
+#ifdef STARTER_STEPPER
+  stepsPerRevolution = 4096;  // change this to fit the number of steps per revolution
+  myStepper = new Stepper(stepsPerRevolution, 6, 7, 8, 9);
+  myStepper->setSpeed(10);
+#endif
 }
 
 // Start at 0deg and step 1 degree until 180 degrees
@@ -63,13 +91,13 @@ void stepperSetup()
 void stepperLoop()
 {
   if (clockwise) // step 1/100 of a revolution clockwise
-    myStepper.step(stepsPerRevolution / 100 * -1);
+    myStepper->step(stepsPerRevolution / 100 * -1);
   else // step 1/100 of a revolution:
-    myStepper.step(stepsPerRevolution / 100);
+    myStepper->step(stepsPerRevolution / 100);
 
   numSteps++;
 
-  if (numSteps > 50)
+  if (numSteps > stepRange)
   {
     clockwise = !clockwise;
     numSteps = 0;
@@ -80,6 +108,70 @@ void ultrasonicSetup()
 {
   // Not much needed for now
   // distance = 1000; (?)
+}
+
+void encoderSetup()
+{
+  tone(BEEPER_PIN, 1000, 75);
+  delay(150);
+  tone(BEEPER_PIN, 1000, 75);
+  delay(75);
+
+  oldPosition = myEnc.read();
+
+  // Set negative bound
+  while (true)
+  {
+    long newPosition = myEnc.read();
+    if ((newPosition - oldPosition) >= 4)
+    {
+      myStepper->step(stepsPerRevolution / 100);
+      oldPosition = newPosition;
+    }
+    if ((newPosition - oldPosition) <= -4)
+    {
+      myStepper->step(stepsPerRevolution / 100 * -1);
+      oldPosition = newPosition;
+    }
+
+    if (digitalRead(ENCODER_BUTTON) == LOW) break;
+  }
+
+  tone(BEEPER_PIN, 1000, 150);
+  for (int i=0; i<stepRange; i++)
+  {
+    myStepper->step(stepsPerRevolution / 100 * -1);
+  }
+
+  while (true)
+  {
+    long newPosition = myEnc.read();
+    if ((newPosition - oldPosition) >= 4)
+    {
+      myStepper->step(stepsPerRevolution / 100);
+      stepRange -= 1;
+      oldPosition = newPosition;
+    }
+    if ((newPosition - oldPosition) <= -4)
+    {
+      myStepper->step(stepsPerRevolution / 100 * -1);
+      stepRange += 1;
+      oldPosition = newPosition;
+    }
+
+    if (digitalRead(ENCODER_BUTTON) == LOW) break;
+  }
+
+  EEPROM.write(1, stepRange);
+
+  tone(BEEPER_PIN, 1300, 100);
+  delay(100);
+  tone(BEEPER_PIN, 1500, 100);
+  delay(100);
+
+  // while (digitalRead(ENCODER_BUTTON)) { delay(10); }
+
+  // tone(BEEPER_PIN, 1500, 75);
 }
 
 void ultrasonicLoop()
@@ -98,11 +190,22 @@ void servoLoop()
 void setup()
 {
   Serial.begin(9600);
+  EEPROM.begin();
+
+  stepRange = EEPROM.read(1);
 
   pinMode(FAN_MOTOR, OUTPUT);
+  pinMode(BEEPER_PIN, OUTPUT);
+  pinMode(ENCODER_BUTTON, INPUT_PULLUP);
+
+  pinMode(BLUE_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+
   myServo.attach(12);
   stepperSetup();
   ultrasonicSetup();
+
+  encoderSetup();
 }
 
 void loop()
@@ -114,14 +217,29 @@ void loop()
   // Process data to determine if threshold is broken
   if (distance < TRIGGER_DISTANCE_CM)
   {
+    bool beep = false;
     digitalWrite(FAN_MOTOR, HIGH);
 
     for (;;) {
       if (ultrasonic.read() > TRIGGER_DISTANCE_CM) break;
+
+      if (beep)
+      {
+        digitalWrite(BLUE_LED, HIGH);
+        digitalWrite(RED_LED, LOW);
+        tone(BEEPER_PIN, 2000, 100);
+      }
+      else {
+        digitalWrite(BLUE_LED, LOW);
+        digitalWrite(RED_LED, HIGH);
+      }
+      beep = !beep;
       delay(100);
     }
 
     digitalWrite(FAN_MOTOR, LOW);
+    digitalWrite(BLUE_LED, LOW);
+    digitalWrite(RED_LED, LOW);
 
   }
   delay(20);
