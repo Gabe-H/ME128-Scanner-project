@@ -7,75 +7,53 @@
 #include <EEPROM.h>
 
 /**
- * As stepper motor spins cw and ccw from 0 to 180 degrees, the
- * ultrasonic sensor takes readings at each degree and prints it
- * on the lcd. If the reading is less than some threshold, an
- * output will trigger.
+ * As stepper motor spins cw and ccw from 0 to x degrees, the
+ * ultrasonic sensor takes readings at each 1/100th degree.
+ * If the reading is less than some threshold, a buzzer
+ * will beep for some time, then leds will flash and a motor
+ * is triggered.
 */
 
 // Uncomment the stepper motor being used
 #define NEMA17 1
 // #define STARTER_STEPPER 1
 
-#define TRIGGER_DISTANCE_CM 5
+#define TRIGGER_DISTANCE_CM 30 // Ultrasonic sensor threshold
 
-#define FAN_MOTOR 10
-#define BEEPER_PIN 11
-#define ENCODER_BUTTON 4
+// Pin configuration
+#define FAN_MOTOR A4
+#define BEEPER_PIN A3
+#define ENCODER_BUTTON 7
 
-#define BLUE_LED A3
-#define RED_LED A2
+#define BLUE_LED A2
+#define RED_LED A1
 
-// const int rs = 12, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
-// LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+#define SERVO_PIN 12
 
-int stepsPerRevolution = 200;  // change this to fit the number of steps per revolution
-// Stepper myStepper(stepsPerRevolution, 8, 9, 10, 11);
+Encoder myEnc(5, 4);
+Ultrasonic ultrasonic(3, 2);
+////////////////////
+
 Stepper *myStepper;
 Servo myServo;
-Ultrasonic ultrasonic(A5, A4); // Init ultrasonic sensor on pins 12 and 13
-Encoder myEnc(2, 3);
 
-long oldPosition = -999;
+int stepsPerRevolution = 200;  // change this to fit the number of steps per revolution
 
 int distance = 9999; // Distance in cm
 float angle = 0.0; // Direction angle
 bool clockwise = false;
 int numSteps = 0;
-
 int stepRange = 40; // Number of steps to take for each scan pass
 
-/*
-// Init lcd and any variables needed
-void lcdSetup()
-{
-  lcd.begin(16, 2); // Start lcd with 16 columns and 2 rows
+long oldPosition = -999; // Old encoder position tracker
 
-  lcd.setCursor(0, 0);
-  lcd.print("Angle: ");
-  lcd.print("Distance: ");
-}
-
-// Log current read angle and distance from ultrasonic sensor
-void lcdLoop()
-{
-  // Print the current angle on the first row after the text
-  lcd.setCursor(0, 8);
-  lcd.print(angle, 2);
-
-  // Print the current read distance on the second row after the text
-  lcd.setCursor(0, 11);
-  lcd.print(distance);
-  lcd.print(" CM");
-}
-*/
 
 void stepperSetup()
 {
 #ifdef NEMA17
   // Set stepper speed
   stepsPerRevolution = 200;  // change this to fit the number of steps per revolution
-  myStepper = new Stepper(stepsPerRevolution, 6, 7, 8, 9);
+  myStepper = new Stepper(stepsPerRevolution, 8, 9, 10, 11);
   myStepper->setSpeed(10);
 #endif
 
@@ -86,8 +64,7 @@ void stepperSetup()
 #endif
 }
 
-// Start at 0deg and step 1 degree until 180 degrees
-// After 180 degrees change direction and go back to 0
+// Start at 0deg and step 1/100 rev, until limit reached, then turn around
 void stepperLoop()
 {
   if (clockwise) // step 1/100 of a revolution clockwise
@@ -104,31 +81,25 @@ void stepperLoop()
   }
 }
 
-void ultrasonicSetup()
-{
-  // Not much needed for now
-  // distance = 1000; (?)
-}
-
 void encoderSetup()
 {
+  // Startup beeps
   tone(BEEPER_PIN, 1000, 75);
   delay(150);
   tone(BEEPER_PIN, 1000, 75);
-  delay(75);
 
-  oldPosition = myEnc.read();
+  oldPosition = myEnc.read(); // Init encoder position
 
-  // Set negative bound
+  // Set negative bound setup
   while (true)
   {
     long newPosition = myEnc.read();
-    if ((newPosition - oldPosition) >= 4)
+    if ((newPosition - oldPosition) >= 4) // Encoder turned clockwise
     {
       myStepper->step(stepsPerRevolution / 100);
       oldPosition = newPosition;
     }
-    if ((newPosition - oldPosition) <= -4)
+    if ((newPosition - oldPosition) <= -4) // Encoder turned ccw
     {
       myStepper->step(stepsPerRevolution / 100 * -1);
       oldPosition = newPosition;
@@ -138,11 +109,13 @@ void encoderSetup()
   }
 
   tone(BEEPER_PIN, 1000, 150);
+  // Move to configured bound
   for (int i=0; i<stepRange; i++)
   {
     myStepper->step(stepsPerRevolution / 100 * -1);
   }
 
+  // Same setup as before, but track how many steps taken
   while (true)
   {
     long newPosition = myEnc.read();
@@ -164,20 +137,17 @@ void encoderSetup()
 
   EEPROM.write(1, stepRange);
 
+  // Ready beeps
   tone(BEEPER_PIN, 1300, 100);
   delay(100);
   tone(BEEPER_PIN, 1500, 100);
   delay(100);
-
-  // while (digitalRead(ENCODER_BUTTON)) { delay(10); }
-
-  // tone(BEEPER_PIN, 1500, 75);
 }
 
 void ultrasonicLoop()
 {
   distance = ultrasonic.read();
-  Serial.println(distance);
+  // Serial.println(distance);
 }
 
 void servoLoop()
@@ -189,23 +159,23 @@ void servoLoop()
 
 void setup()
 {
-  Serial.begin(9600);
-  EEPROM.begin();
+  // Serial.begin(9600);
+  EEPROM.begin(); // Init storage
 
-  stepRange = EEPROM.read(1);
+  stepRange = EEPROM.read(1); // Read saved scan range
 
+  // Setup outputs
   pinMode(FAN_MOTOR, OUTPUT);
   pinMode(BEEPER_PIN, OUTPUT);
-  pinMode(ENCODER_BUTTON, INPUT_PULLUP);
-
+  pinMode(ENCODER_BUTTON, INPUT_PULLUP); // button needs internal pullup
   pinMode(BLUE_LED, OUTPUT);
   pinMode(RED_LED, OUTPUT);
 
-  myServo.attach(12);
-  stepperSetup();
-  ultrasonicSetup();
+  myServo.attach(SERVO_PIN);
 
-  encoderSetup();
+  // Run individual setup functions
+  stepperSetup();
+  encoderSetup(); // <- contains initial configuration stuff
 }
 
 void loop()
@@ -218,29 +188,37 @@ void loop()
   if (distance < TRIGGER_DISTANCE_CM)
   {
     bool beep = false;
-    digitalWrite(FAN_MOTOR, HIGH);
+
+    // Setup beep time before the motor and leds turnon
+    unsigned long beepTime = millis() + 5000L;
 
     for (;;) {
+      // Break alert if the threshold is no longer broken
       if (ultrasonic.read() > TRIGGER_DISTANCE_CM) break;
 
-      if (beep)
+      // For the first beepTime ms, only beep
+      if (millis() <= beepTime)
       {
-        digitalWrite(BLUE_LED, HIGH);
-        digitalWrite(RED_LED, LOW);
-        tone(BEEPER_PIN, 2000, 100);
+        if (beep) tone(BEEPER_PIN, 2000, 100);
+        else delay(100);
+        beep = !beep;
       }
-      else {
-        digitalWrite(BLUE_LED, LOW);
-        digitalWrite(RED_LED, HIGH);
+      else // After beepTime ms, toggle red/blue leds and turn on motor
+      {
+        digitalWrite(FAN_MOTOR, HIGH); // <- will be called on each blink, kind of redundant
+
+        digitalWrite(BLUE_LED, beep);
+        digitalWrite(RED_LED, !beep);
+        beep = !beep;
+
+        delay(100);
       }
-      beep = !beep;
-      delay(100);
     }
 
+    // Turn off fan and leds when threshold is not broken.
     digitalWrite(FAN_MOTOR, LOW);
     digitalWrite(BLUE_LED, LOW);
     digitalWrite(RED_LED, LOW);
-
   }
-  delay(20);
+  delay(5);
 }
