@@ -6,6 +6,9 @@
 #include <Encoder.h>
 #include <EEPROM.h>
 
+#include <IRremote.h>
+#include <ir_defs.h>
+
 /**
  * As stepper motor spins cw and ccw from 0 to x degrees, the
  * ultrasonic sensor takes readings at each 1/100th degree.
@@ -30,14 +33,18 @@
 
 #define SERVO_PIN 12
 
+#define IR_PIN 6
+
 Encoder myEnc(5, 4);
 Ultrasonic ultrasonic(3, 2);
+IRrecv ir(IR_PIN);
 ////////////////////
 
 Stepper *myStepper;
 Servo myServo;
 
-int stepsPerRevolution = 200;  // change this to fit the number of steps per revolution
+// change this to fit the number of steps per revolution
+int stepsPerRevolution = 200;
 
 int distance = 9999; // Distance in cm
 float angle = 0.0; // Direction angle
@@ -47,21 +54,15 @@ int stepRange = 40; // Number of steps to take for each scan pass
 
 long oldPosition = -999; // Old encoder position tracker
 
+bool running = true;
+
 
 void stepperSetup()
 {
-#ifdef NEMA17
-  // Set stepper speed
-  stepsPerRevolution = 200;  // change this to fit the number of steps per revolution
+  // Set stepper speed - change this to fit the number of steps per revolution
+  stepsPerRevolution = 200;
   myStepper = new Stepper(stepsPerRevolution, 8, 9, 10, 11);
   myStepper->setSpeed(10);
-#endif
-
-#ifdef STARTER_STEPPER
-  stepsPerRevolution = 4096;  // change this to fit the number of steps per revolution
-  myStepper = new Stepper(stepsPerRevolution, 6, 7, 8, 9);
-  myStepper->setSpeed(10);
-#endif
 }
 
 // Start at 0deg and step 1/100 rev, until limit reached, then turn around
@@ -81,12 +82,44 @@ void stepperLoop()
   }
 }
 
+void irLoop()
+{
+  if (!ir.decode()) return;
+
+  uint16_t cmd = ir.decodedIRData.command;
+
+  switch (cmd)
+  {
+  case IR_POWER:
+    running = false;
+    break;
+  case IR_PLAY_PAUSE:
+    running = !running;
+    tone(BEEPER_PIN, 1500, 100);
+    break;
+  case IR_UP:
+
+    break;
+  case IR_DOWN:
+
+    break;
+
+  default:
+    // Unknown command
+    Serial.print("Unknown button pressed: ");
+    Serial.println(cmd);
+    break;
+  }
+}
+
 void encoderSetup()
 {
   // Startup beeps
   tone(BEEPER_PIN, 1000, 75);
   delay(150);
   tone(BEEPER_PIN, 1000, 75);
+
+  // myStepper->setSpeed(5);
 
   oldPosition = myEnc.read(); // Init encoder position
 
@@ -135,6 +168,8 @@ void encoderSetup()
     if (digitalRead(ENCODER_BUTTON) == LOW) break;
   }
 
+  // myStepper->setSpeed(10);
+
   EEPROM.write(1, stepRange);
 
   // Ready beeps
@@ -159,7 +194,7 @@ void servoLoop()
 
 void setup()
 {
-  // Serial.begin(9600);
+  Serial.begin(9600);
   EEPROM.begin(); // Init storage
 
   stepRange = EEPROM.read(1); // Read saved scan range
@@ -172,6 +207,7 @@ void setup()
   pinMode(RED_LED, OUTPUT);
 
   myServo.attach(SERVO_PIN);
+  ir.enableIRIn();
 
   // Run individual setup functions
   stepperSetup();
@@ -180,6 +216,13 @@ void setup()
 
 void loop()
 {
+
+  if (!running) {
+    irLoop();
+    delay(100); // Breathe
+    return;
+  }
+
   stepperLoop(); // Move motor
   ultrasonicLoop(); // Take reading
   servoLoop();
@@ -190,9 +233,13 @@ void loop()
     bool beep = false;
 
     // Setup beep time before the motor and leds turnon
-    unsigned long beepTime = millis() + 5000L;
+    unsigned long beepTime = millis() + 1000L;
 
     for (;;) {
+      // Check ir signal and stop if requested
+      irLoop();
+      if (!running) break;
+
       // Break alert if the threshold is no longer broken
       if (ultrasonic.read() > TRIGGER_DISTANCE_CM) break;
 
@@ -200,13 +247,12 @@ void loop()
       if (millis() <= beepTime)
       {
         if (beep) tone(BEEPER_PIN, 2000, 100);
-        else delay(100);
+        delay(100);
         beep = !beep;
       }
       else // After beepTime ms, toggle red/blue leds and turn on motor
       {
-        digitalWrite(FAN_MOTOR, HIGH); // <- will be called on each blink, kind of redundant
-
+        digitalWrite(FAN_MOTOR, HIGH); // <- will be called on each blink
         digitalWrite(BLUE_LED, beep);
         digitalWrite(RED_LED, !beep);
         beep = !beep;
