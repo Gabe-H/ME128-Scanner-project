@@ -84,6 +84,14 @@ void stepperLoop()
 
 void irLoop()
 {
+
+  if (digitalRead(ENCODER_BUTTON) == LOW)
+  {
+    running = !running;
+    
+    while (digitalRead(ENCODER_BUTTON) == LOW) { delay(10); }
+  }
+  
   if (!ir.decode()) return;
 
   uint16_t cmd = ir.decodedIRData.command;
@@ -217,8 +225,8 @@ void setup()
 void loop()
 {
 
+  irLoop();
   if (!running) {
-    irLoop();
     delay(100); // Breathe
     return;
   }
@@ -246,7 +254,10 @@ void loop()
       // For the first beepTime ms, only beep
       if (millis() <= beepTime)
       {
-        if (beep) tone(BEEPER_PIN, 2000, 100);
+        if (beep)
+        {
+          tone(BEEPER_PIN, 2000, 100);
+        }
         delay(100);
         beep = !beep;
       }
